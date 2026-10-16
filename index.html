@@ -280,7 +280,7 @@ button:not(:disabled):active{transform:translateY(0) scale(.98);box-shadow:inset
     <header class="topbar"><div class="topbar-title"><span>⚡</span>EcoWatt Dashboard</div><div class="top-right"><span class="date"><i data-icon="calendar"></i><span id="today"></span></span><span class="sandbox"><b>○</b> Mock Sandbox Mode</span></div></header>
     <main>
       <section id="overview" class="tab-panel" role="tabpanel" aria-labelledby="tab-overview">
-        <div class="page-heading"><div><p class="eyebrow">Overview</p><h1>Home energy.</h1><p class="subtitle">Your daily usage, costs and carbon footprint.</p></div><button class="btn btn-primary" data-open-simulator><i data-icon="sliders"></i>Open simulator<i data-icon="arrow"></i></button></div>
+        <div class="page-heading"><div><p class="eyebrow">Overview</p><h1>Home energy.</h1><p class="subtitle">Your daily usage, costs and carbon footprint.</p></div><div><button class="btn btn-primary" id="generate-forecast"><i data-icon="sparkles"></i>Generate ML Forecast</button><p id="forecast-status" role="status" aria-live="polite" style="margin:8px 0 0;text-align:right;font-size:.78rem;color:var(--muted)">Ready when you are</p></div></div>
         <div class="metrics">
           <article class="card metric"><div class="metric-top">Predicted Daily Usage<span class="metric-icon"><i data-icon="bolt"></i></span></div><div class="metric-value"><span id="daily-usage">24.5</span><span class="unit">kWh</span><span class="pill" id="overview-risk"><span class="dot"></span>Safe</span></div><div class="metric-note"><span id="usage-comparison" class="good">↑ 2.9%</span> <span>vs. yesterday</span></div></article>
           <article class="card metric"><div class="metric-top">Estimated Cost<span class="metric-icon cyan"><i data-icon="dollar"></i></span></div><div class="metric-value"><span id="daily-cost">$3.92</span><span class="unit">/ day</span></div><div class="metric-note">Based on a flat rate of $0.16 / kWh</div></article>
@@ -333,7 +333,7 @@ function switchTab(id,focus=false){hideChartTooltip();tabs.forEach(tab=>{const a
 tabs.forEach((tab,index)=>{tab.addEventListener('click',()=>switchTab(tab.dataset.tab));tab.addEventListener('keydown',e=>{let next;if(e.key==='ArrowRight'||e.key==='ArrowDown')next=(index+1)%tabs.length;if(e.key==='ArrowLeft'||e.key==='ArrowUp')next=(index+tabs.length-1)%tabs.length;if(e.key==='Home')next=0;if(e.key==='End')next=tabs.length-1;if(next!==undefined){e.preventDefault();switchTab(tabs[next].dataset.tab,true)}})});
 document.querySelectorAll('[data-open-simulator]').forEach(b=>b.addEventListener('click',()=>switchTab('simulator',true)));
 let trendChart,featureChart;
-let historyDates=[],historical=[20.4,22.8,19.2,25.6,21.4,23.8],simulated=24.5,influences=[12,6.4,2,1.1,3],predictedDate=new Date();
+let historyDates=[],modelHistory=[],historical=[20.4,22.8,19.2,25.6,21.4,23.8],simulated=24.5,forecast=24.5,influences=[12,6.4,2,1.1,3],predictedDate=new Date(),predictionRequest=0,forecastErrorShown=false;
 const featureLabels=['AC runtime','Outdoor temp','Appliances','Occupancy','Baseline'];
 // Chart.js and the offline renderer consume the same CSS design tokens.
 const themeColor = name => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
@@ -364,7 +364,7 @@ const unitValue = kwh => chartUI.trend.unit === 'cost' ? kwh * .16 : kwh;
 const unitText = kwh => chartUI.trend.unit === 'cost' ? currency.format(kwh*.16) : decimal.format(kwh)+' kWh';
 function allTrendRecords() {
   return historical.map((kwh,i)=>({date:historyDates[i], kwh, source:i, predicted:false}))
-    .concat({date:predictedDate.toISOString().slice(0,10), kwh:simulated, source:6, predicted:true});
+    .concat({date:predictedDate.toISOString().slice(0,10), kwh:forecast, source:6, predicted:true});
 }
 function availableItems(kind) {
   if(kind==='feature') return featureLabels.map((_,i)=>({key:'feature-'+i,index:i,dataset:0}));
@@ -564,19 +564,38 @@ function updateDashboard(){
  const risk=simulated<25?'Safe':simulated<32?'Warning':'Critical';
  const cost='$'+(simulated*.16).toFixed(2),carbon=(simulated*.4).toFixed(1);
  ['temp','ac','appliances','occupancy'].forEach(id=>{const el=$(id);$(id+'-value').textContent=el.value+(id==='temp'?'°C':id==='occupancy'?'':'h');const pct=(el.value-el.min)/(el.max-el.min)*100;el.style.background=`linear-gradient(to right, var(--primary) ${pct}%, var(--track) ${pct}%)`});
- $('sim-usage').textContent=$('daily-usage').textContent=simulated.toFixed(1);$('sim-cost').textContent=$('daily-cost').textContent=cost;$('sim-carbon').textContent=carbon+' kg CO₂';$('daily-carbon').textContent=carbon;
+ $('sim-usage').textContent=simulated.toFixed(1);$('sim-cost').textContent=cost;$('sim-carbon').textContent=carbon+' kg CO₂';
+ const forecastCost='$'+(forecast*.16).toFixed(2),forecastCarbon=(forecast*.4).toFixed(1);
+ $('daily-usage').textContent=forecast.toFixed(1);$('daily-cost').textContent=forecastCost;$('daily-carbon').textContent=forecastCarbon;
  ['overview-risk','sim-risk'].forEach(id=>{const el=$(id);el.className='pill '+(risk==='Safe'?'':risk.toLowerCase());el.textContent='● '+risk;el.title='Mock daily risk: Safe <25 kWh; Warning 25–32 kWh; Critical ≥32 kWh'});
  const comparison=historical[5]>0?(simulated/historical[5]-1)*100:0;$('usage-comparison').textContent=historical[5]>0?(comparison>=0?'↑ ':'↓ ')+Math.abs(comparison).toFixed(1)+'%':'No baseline';$('usage-comparison').style.color=comparison<=0?'var(--success)':chartPalette.warning;
  if(ac>=1){$('recommendation').textContent=`Reduce AC runtime by 1 hour to save ${(1.5*dayFactor).toFixed(1)} kWh and $${(1.5*dayFactor*.16).toFixed(2)} per day. Try it with the slider.`}else if(appliances>=1){$('recommendation').textContent=`Trim appliance runtime by 1 hour to save ${(0.5*dayFactor).toFixed(2)} kWh and $${(.5*dayFactor*.16).toFixed(2)} per day. Run flexible loads outside peak hours to help reduce grid strain.`}else{$('recommendation').textContent='Your flexible loads are already low. Keep unused devices switched off and track your real consumption to find your next saving.'}
  syncChartViews();
  renderAlerts(risk);
 }
+async function requestModelPrediction(){
+ const button=$('generate-forecast'),status=$('forecast-status');
+ if(modelHistory.length<7){status.textContent='Need at least 7 daily readings.';return}
+ const requestId=++predictionRequest;
+ button.disabled=true;status.textContent='Generating forecast…';
+ try{
+  const response=await fetch('http://127.0.0.1:8000/predict',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({history:modelHistory.slice(-366),last_date:historyDates.at(-1)})});
+  if(!response.ok){let detail='Forecast service returned '+response.status;try{const body=await response.json();if(body.detail)detail=body.detail}catch(error){}throw new Error(detail)}
+  const result=await response.json();if(requestId!==predictionRequest)return;
+  forecast=result.prediction_kwh;forecastErrorShown=false;predictedDate=new Date(result.date+'T12:00:00Z');
+  $('daily-usage').textContent=forecast.toFixed(1);$('daily-cost').textContent='$'+(forecast*.16).toFixed(2);$('daily-carbon').textContent=(forecast*.4).toFixed(1);
+  status.textContent=`ML forecast for ${result.date}: ${forecast.toFixed(1)} kWh`;
+  syncChartViews();
+ }catch(error){if(requestId===predictionRequest){status.textContent='Forecast failed: '+error.message;if(!forecastErrorShown){forecastErrorShown=true;toast('Could not generate the ML forecast. Check that the API is running.')}}}
+ finally{if(requestId===predictionRequest)button.disabled=false}
+}
+$('generate-forecast').addEventListener('click',requestModelPrediction);
 document.querySelectorAll('input[type=range]').forEach(el=>el.addEventListener('input',updateDashboard));$('day-type').addEventListener('change',updateDashboard);
 $('reset-simulation').addEventListener('click',()=>{Object.entries({temp:32,ac:8,appliances:4,occupancy:4,'day-type':1}).forEach(([id,value])=>$(id).value=value);updateDashboard();toast('Household inputs reset to defaults.')});
 let toastTimer;function toast(message){$('toast').textContent=message;$('toast').hidden=false;clearTimeout(toastTimer);toastTimer=setTimeout(()=>$('toast').hidden=true,4000)}
-const sampleRows=[{date:'2026-10-10',temp:29,ac:6,appliances:3,total:20.4},{date:'2026-10-11',temp:31,ac:7,appliances:4,total:22.8},{date:'2026-10-12',temp:28,ac:5,appliances:4,total:19.2},{date:'2026-10-13',temp:35,ac:9,appliances:5,total:25.6},{date:'2026-10-14',temp:30,ac:6,appliances:4,total:21.4},{date:'2026-10-15',temp:32,ac:8,appliances:3,total:23.8}];
+const sampleRows=[{date:'2026-10-08',temp:29,ac:6,appliances:3,total:20.4},{date:'2026-10-09',temp:31,ac:7,appliances:4,total:22.8},{date:'2026-10-10',temp:28,ac:5,appliances:4,total:19.2},{date:'2026-10-11',temp:35,ac:9,appliances:5,total:25.6},{date:'2026-10-12',temp:30,ac:6,appliances:4,total:21.4},{date:'2026-10-13',temp:32,ac:8,appliances:3,total:23.8},{date:'2026-10-14',temp:30,ac:7,appliances:4,total:22.1},{date:'2026-10-15',temp:32,ac:8,appliances:3,total:23.8}];
 function renderData(rows,name){$('data-body').replaceChildren();rows.slice(-5).reverse().forEach(r=>{const tr=document.createElement('tr');[r.date,r.temp+'°C',r.ac+'h',r.appliances+'h',r.total.toFixed(1)+' kWh'].forEach(t=>{const td=document.createElement('td');td.textContent=t;tr.append(td)});$('data-body').append(tr)});$('row-count').textContent=rows.length+' records';$('dataset-name').textContent=name+' · Previewing '+Math.min(rows.length,5)+' most recent records';$('dataset-status').textContent=rows.length+' validated records · Stored in this session only'}
-function applyHistory(rows){historyDates=rows.slice(-6).map(r=>r.date);historical=rows.slice(-6).map(r=>r.total);predictedDate=new Date(rows.at(-1).date+'T12:00:00Z');predictedDate.setUTCDate(predictedDate.getUTCDate()+1);updateDashboard()}
+function applyHistory(rows){modelHistory=rows.map(r=>r.total);historyDates=rows.slice(-6).map(r=>r.date);historical=rows.slice(-6).map(r=>r.total);predictedDate=new Date(rows.at(-1).date+'T12:00:00Z');predictedDate.setUTCDate(predictedDate.getUTCDate()+1);forecast=simulated;updateDashboard()}
 $('load-sample').addEventListener('click',()=>{importVersion++;setImportBusy(false);$('drop-zone').classList.remove('has-error');renderData(sampleRows,'Built-in sample');applyHistory(sampleRows);$('upload-status').textContent='';$('csv-file').value='';toast('Sample dataset loaded. Your energy trend is ready.')});
 $('download-sample').addEventListener('click',()=>{const csv='Date,Temp,AC Hours,Appliance Hours,Total kWh\n'+sampleRows.map(r=>[r.date,r.temp,r.ac,r.appliances,r.total].join(',')).join('\n');const url=URL.createObjectURL(new Blob([csv],{type:'text/csv'}));const link=document.createElement('a');link.href=url;link.download='ecowatt-energy-template.csv';link.click();setTimeout(()=>URL.revokeObjectURL(url),1000);toast('CSV template downloaded.')});
 // CSV parsing supports quoted commas and escaped quotes without third-party code.
